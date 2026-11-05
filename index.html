@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#e8590c">
+  <title>KICKR Trainer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>KICKR Trainer</h1>
+    <span id="conn-pill" class="pill">nicht verbunden</span>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button id="tab-build" role="tab" aria-selected="true">1 · Training</button>
+    <button id="tab-ride" role="tab" aria-selected="false">2 · Fahren</button>
+  </nav>
+
+  <main>
+    <!-- ================================================= Training bauen -->
+    <section id="view-build">
+      <div class="card">
+        <div class="row">
+          <label class="field grow">Name
+            <input id="wo-name" type="text" autocomplete="off">
+          </label>
+          <label class="field grow">Gespeicherte Trainings
+            <select id="wo-saved"></select>
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="wo-save" class="btn">Speichern</button>
+          <button id="wo-new" class="btn">Neu</button>
+          <button id="wo-delete" class="btn danger">Löschen</button>
+        </div>
+        <div id="wo-msg" class="muted" style="margin-top:6px"></div>
+      </div>
+
+      <div class="card">
+        <svg id="build-chart" class="chart" viewBox="0 0 1000 300" role="img" aria-label="Trainingsprofil"></svg>
+        <div id="build-summary" class="summary"></div>
+      </div>
+
+      <div id="blocks"></div>
+
+      <div class="add-row">
+        <button class="btn" data-add="warmup">+ Einfahren</button>
+        <button class="btn" data-add="steady">+ Konstant</button>
+        <button class="btn" data-add="ramp">+ Rampe</button>
+        <button class="btn" data-add="intervals">+ Intervalle</button>
+        <button class="btn" data-add="recovery">+ Pause/Erholung</button>
+      </div>
+
+      <div class="card">
+        <h2>CLIMB-Welle</h2>
+        <label class="check"><input id="climb-on" type="checkbox"> CLIMB fährt während des Trainings langsam hoch und runter</label>
+        <div class="row" style="margin-top:10px">
+          <label class="field grow">von (%)<input id="climb-min" type="number" inputmode="decimal" step="0.5"></label>
+          <label class="field grow">bis (%)<input id="climb-max" type="number" inputmode="decimal" step="0.5"></label>
+          <label class="field grow">Minuten pro Richtung<input id="climb-minutes" type="number" inputmode="decimal" step="0.5"></label>
+        </div>
+        <div id="climb-text" class="muted" style="margin-top:8px"></div>
+      </div>
+
+      <button id="go-ride" class="btn primary big">Weiter zum Fahren →</button>
+    </section>
+
+    <!-- ================================================= Fahren -->
+    <section id="view-ride" class="hidden">
+      <div id="ride-setup">
+        <div class="card">
+          <h2>1. KICKR verbinden</h2>
+          <div id="bt-support" class="notice warn hidden"></div>
+          <details class="help">
+            <summary>Was du brauchst (beim ersten Mal lesen)</summary>
+            <ul>
+              <li><b>Trainer:</b> Wahoo-Trainer, an dem der KICKR CLIMB läuft (KICKR, KICKR CORE, KICKR MOVE, KICKR SNAP)
+                mit aktueller Firmware. Firmware-Update über die Wahoo-App.</li>
+              <li><b>CLIMB:</b> einmal in der Wahoo-App mit dem Trainer koppeln. Danach verbindet er sich von selbst mit dem Trainer.
+                Diese Seite steuert den CLIMB über den Trainer.</li>
+              <li><b>Gerät:</b> Android, Windows oder Mac mit Chrome oder Edge. iPhone/iPad: Safari geht nicht,
+                Seite in der kostenlosen App <b>Bluefy</b> öffnen.</li>
+              <li><b>Nur eine Steuer-App:</b> Zwift, Wahoo-App und Co. vorher schließen. Uhr oder Radcomputer
+                den Trainer nur als <b>Leistungsmesser</b> koppeln, nicht als Smart Trainer.</li>
+              <li><b>Taucht der Trainer nicht auf:</b> kurz treten (weckt ihn auf), Bluetooth und Standortfreigabe am Gerät einschalten.</li>
+              <li>Andere Trainer mit Bluetooth FTMS (z. B. Tacx, Elite) erscheinen auch. Die Leistungssteuerung kann dort funktionieren,
+                die Neigungswelle braucht einen CLIMB.</li>
+            </ul>
+          </details>
+          <button id="btn-connect" class="btn primary big">KICKR suchen und verbinden</button>
+          <div id="conn-status" class="notice">Noch nicht verbunden.</div>
+          <div id="conn-power" class="muted" style="margin-top:6px"></div>
+          <label class="check"><input id="sim-mode" type="checkbox"> Ohne KICKR testen (Simulator)</label>
+          <p class="muted">Uhr oder Edge: den KICKR dort nur als <b>Leistungsmesser</b> koppeln, nicht als Smart Trainer.
+            Sonst sperrt der KICKR die Neigung. Die Aufzeichnung startest du wie gewohnt auf der Uhr.</p>
+        </div>
+        <div class="card">
+          <h2>2. Training</h2>
+          <div id="ride-summary"></div>
+          <button id="btn-start" class="btn primary big" disabled>Start</button>
+          <div class="muted" style="margin-top:6px">Die Zeit läuft erst, wenn du trittst. Hörst du auf zu treten, pausiert das Training automatisch.</div>
+        </div>
+      </div>
+
+      <div id="ride-live" class="hidden">
+        <div id="banner" class="banner"></div>
+        <div class="card">
+          <div id="step-now" class="step-now"></div>
+          <div id="step-next" class="step-next"></div>
+        </div>
+        <div class="tiles">
+          <div class="tile target"><div class="label">Soll</div><div id="t-target" class="value">0</div><div id="t-intensity" class="sub">W</div></div>
+          <div class="tile"><div class="label">Ist</div><div id="t-power" class="value">0</div><div class="sub">W</div></div>
+          <div class="tile"><div class="label">Block noch</div><div id="t-remaining" class="value">0:00</div><div id="t-next-in" class="sub"></div></div>
+          <div class="tile grade"><div class="label">CLIMB</div><div id="t-grade" class="value">0.0</div><div id="t-grade-target" class="sub">%</div></div>
+        </div>
+        <div class="card">
+          <svg id="ride-chart" class="chart" viewBox="0 0 1000 300" role="img" aria-label="Trainingsfortschritt"></svg>
+          <div id="ride-progress" class="summary"></div>
+        </div>
+        <div class="controls">
+          <button id="btn-pause" class="btn">Pause</button>
+          <button id="btn-skip" class="btn">Nächster Block</button>
+          <button id="btn-minus" class="btn">− 5 %</button>
+          <button id="btn-plus" class="btn">+ 5 %</button>
+          <button id="btn-stop" class="btn danger">Beenden</button>
+        </div>
+        <label id="sim-pedal-row" class="check hidden"><input id="sim-pedal" type="checkbox" checked> Simulator: ich trete</label>
+      </div>
+
+      <div id="ride-end" class="hidden">
+        <div id="end-banner" class="banner ok"></div>
+        <div id="end-text" class="card"></div>
+        <button id="btn-again" class="btn primary big">Zurück zum Training</button>
+      </div>
+    </section>
+    <footer class="muted">Privates Projekt, nicht von Wahoo. Nutzung auf eigene Gefahr.
+      Trainings werden nur auf diesem Gerät gespeichert, es werden keine Daten verschickt.</footer>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
