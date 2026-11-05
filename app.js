@@ -1,12 +1,13 @@
 import {
-  BLOCK_TYPES, DEFAULT_CLIMB, RideController, blockDuration, climbGrade, expandWorkout, fmtTime,
-  newBlock, totalDuration, validateBlock, validateClimb,
-} from "./core.js";
-import { KickrBle, SimKickr, bluetoothSupport } from "./ble.js";
+  BLOCK_TYPES, DEFAULT_CLIMB, MAX_PARTS, RideController, blockDuration, climbGrade, expandWorkout, fmtTime,
+  newBlock, newPart, normalizeBlock, totalDuration, validateBlock, validateClimb,
+} from "./core.js?v=2";
+import { KickrBle, SimKickr, bluetoothSupport } from "./ble.js?v=2";
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "kickr.workouts.v1";
 const DRAFT_KEY = "kickr.draft.v1";
+const CLIP_KEY = "kickr.clipboard.v1";
 const params = new URLSearchParams(location.search);
 const SPEED = Math.max(1, Number(params.get("zeitraffer")) || 1); // nur zum Testen
 
@@ -15,7 +16,8 @@ const EXAMPLE = {
   blocks: [
     { type: "steady", name: "Warmfahren", durationS: 20 * 60, watts: 180 },
     { type: "ramp", name: "Steigern", durationS: 10 * 60, fromW: 180, toW: 220 },
-    { type: "intervals", name: "Intervalle", repeats: 10, onS: 30, onW: 400, offS: 10, offW: 200 },
+    { type: "intervals", name: "Intervalle", repeats: 10,
+      parts: [{ durationS: 30, watts: 400, name: "Belastung" }, { durationS: 10, watts: 200, name: "Erholung" }] },
     { type: "steady", name: "Pause", durationS: 10 * 60, watts: 130 },
   ],
   climb: { ...DEFAULT_CLIMB },
@@ -25,6 +27,7 @@ let workout = loadDraft() ?? structuredClone(EXAMPLE);
 let trainer = null;
 let ctrl = null;
 let wakeLock = null;
+let clipboard = loadClipboard(); // kopierter Block, bleibt auch für andere Trainings erhalten
 
 // ---------------------------------------------------------------- Speicher (nur dieses Gerät)
 
@@ -53,6 +56,19 @@ function loadDraft() {
   } catch {
     return null;
   }
+}
+
+function loadClipboard() {
+  try {
+    const b = JSON.parse(localStorage.getItem(CLIP_KEY) || "null");
+    return b && typeof b.type === "string" ? normalizeBlock(b) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveClipboard() {
+  try { localStorage.setItem(CLIP_KEY, JSON.stringify(clipboard)); } catch { /* nur im Speicher */ }
 }
 
 function saveDraft() {
@@ -113,7 +129,7 @@ function durationFields(prefix, seconds, onChange) {
 }
 
 function blockColor(block) {
-  const w = block.type === "intervals" ? block.onW : block.type === "ramp" ? Math.max(block.fromW, block.toW) : block.watts;
+  const w = block.type === "intervals" ? Math.max(...block.parts.map((p) => p.watts)) : block.type === "ramp" ? Math.max(block.fromW, block.toW) : block.watts;
   if (w >= 350) return "#c92a2a";
   if (w >= 250) return "#e8590c";
   if (w >= 180) return "#f59f00";
@@ -159,7 +175,8 @@ function renderBlock(block, i) {
   tools.append(
     mk("↑", "nach oben", () => move(i, -1), i === 0),
     mk("↓", "nach unten", () => move(i, +1), i === workout.blocks.length - 1),
-    mk("⧉", "duplizieren", () => { workout.blocks.splice(i + 1, 0, structuredClone(block)); changed(true); }),
+    mk("⧉", "direkt darunter duplizieren", () => { workout.blocks.splice(i + 1, 0, structuredClone(block)); changed(true); }),
+    mk("Kopieren", "kopieren, um ihn später mit „Einfügen“ wieder einzusetzen", () => copyBlock(block)),
     mk("✕", "löschen", () => { workout.blocks.splice(i, 1); changed(true); }),
   );
   head.append(type, name, tools);
@@ -173,15 +190,8 @@ function renderBlock(block, i) {
     body.append(...durationFields("Dauer", block.durationS, set("durationS")),
       field("von Watt", block.fromW, set("fromW")), field("bis Watt", block.toW, set("toW")));
   } else {
-    body.append(field("Wiederholungen", block.repeats, set("repeats")));
-    const on = document.createElement("div");
-    on.className = "group-label";
-    on.textContent = "Belastung";
-    body.append(on, ...durationFields("", block.onS, set("onS")), field("Watt", block.onW, set("onW")));
-    const off = document.createElement("div");
-    off.className = "group-label";
-    off.textContent = "Erholung";
-    body.append(off, ...durationFields("", block.offS, set("offS")), field("Watt", block.offW, set("offW")));
+    body.append(field("Wiederholungen", block.repeats, set("repeats")), partsCountField(block));
+    block.parts.forEach((part, k) => body.append(renderPart(block, part, k, card)));
   }
 
   const foot = document.createElement("div");
@@ -189,6 +199,64 @@ function renderBlock(block, i) {
   card.append(head, body, foot);
   updateBlockFoot(card, block);
   return card;
+}
+
+/** Anzahl Teile pro Durchgang. Ändert die Kartenstruktur, daher erst beim Verlassen des Felds. */
+function partsCountField(block) {
+  const wrap = field("Teile pro Durchgang", block.parts.length, () => {}, {});
+  const input = wrap.querySelector("input");
+  input.min = "1";
+  input.max = String(MAX_PARTS);
+  input.addEventListener("change", () => {
+    const n = num(input.value);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_PARTS) {
+      input.classList.add("invalid");
+      return;
+    }
+    while (block.parts.length < n) {
+      const last = block.parts[block.parts.length - 1];
+      block.parts.push(newPart(last?.durationS ?? 60, last?.watts ?? 200));
+    }
+    block.parts.length = n;
+    changed(true);
+  });
+  return wrap;
+}
+
+function renderPart(block, part, k, card) {
+  const row = document.createElement("div");
+  row.className = "part";
+  const nameWrap = document.createElement("label");
+  nameWrap.className = "field";
+  nameWrap.textContent = `Teil ${k + 1}`;
+  const name = document.createElement("input");
+  name.type = "text";
+  name.value = part.name ?? "";
+  name.placeholder = `Teil ${k + 1}`;
+  name.addEventListener("input", () => { part.name = name.value; changed(false, card, block); });
+  nameWrap.append(name);
+  const set = (key) => (v) => { part[key] = v; changed(false, card, block); };
+  row.append(nameWrap, ...durationFields("", part.durationS, set("durationS")), field("Watt", part.watts, set("watts")));
+  return row;
+}
+
+function copyBlock(block) {
+  clipboard = structuredClone(block);
+  saveClipboard();
+  renderPasteButton();
+  showWoMsg(`„${block.name || BLOCK_TYPES[block.type]}“ kopiert. Unten mit „Einfügen“ ans Ende setzen.`);
+}
+
+function renderPasteButton() {
+  const btn = $("paste-block");
+  btn.classList.toggle("hidden", !clipboard);
+  if (clipboard) btn.textContent = `Einfügen: ${clipboard.name || BLOCK_TYPES[clipboard.type]} (${fmtTime(blockDuration(clipboard))})`;
+}
+
+function blockSummary(block) {
+  if (block.type !== "intervals") return `Dauer ${fmtTime(blockDuration(block))}`;
+  const one = block.parts.map((p) => `${fmtTime(p.durationS)} ${p.watts} W`).join(" · ");
+  return `${block.repeats} × (${one}) = ${fmtTime(blockDuration(block))}`;
 }
 
 function updateBlockFoot(card, block) {
@@ -202,7 +270,7 @@ function updateBlockFoot(card, block) {
     e.textContent = errors.join(" · ");
     foot.append(e);
   } else {
-    foot.textContent = `Dauer ${fmtTime(blockDuration(block))}`;
+    foot.textContent = blockSummary(block);
   }
 }
 
@@ -332,6 +400,7 @@ function escapeHtml(text) {
 
 function loadIntoEditor(data) {
   workout = structuredClone(data);
+  workout.blocks = workout.blocks.map(normalizeBlock);
   workout.climb = { ...DEFAULT_CLIMB, ...workout.climb };
   $("wo-name").value = workout.name ?? "";
   $("climb-on").checked = workout.climb.enabled;
@@ -352,6 +421,14 @@ function initBuild() {
       $("blocks").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }
+  $("paste-block").addEventListener("click", () => {
+    if (!clipboard) return;
+    workout.blocks.push(structuredClone(clipboard));
+    changed(true);
+    $("blocks").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
+    showWoMsg("Eingefügt.");
+  });
+  renderPasteButton();
   $("climb-on").addEventListener("change", (e) => { workout.climb.enabled = e.target.checked; changed(false); });
   const climbField = (id, key) => $(id).addEventListener("input", (e) => {
     workout.climb[key] = num(e.target.value);

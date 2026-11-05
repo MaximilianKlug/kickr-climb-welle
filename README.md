@@ -15,6 +15,8 @@ fährt währenddessen langsam zwischen zwei Neigungen hoch und runter, damit sic
 
 ## Funktionen
 
+- Intervalle mit beliebig vielen Teilen pro Durchgang (z. B. 1 min 100/200/300 W, 1 min 50 W) und Wiederholungen.
+- Blöcke kopieren und später wieder einfügen (z. B. dasselbe Set nach einer Pause).
 - Auto-Pause: Hörst du auf zu treten (unter 15 W), stehen Trainingszeit und CLIMB-Welle. Weitertreten = weiter.
 - Intensität ±5 %, Block überspringen, Pause, Beenden (CLIMB fährt auf 0 %).
 - Trainings werden nur im Browser des Geräts gespeichert. Die Seite verschickt keine Daten.

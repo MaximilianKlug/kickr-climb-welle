@@ -42,6 +42,25 @@ export const BLOCK_TYPES = {
   intervals: "Intervalle",
 };
 
+export const MAX_PARTS = 20;
+
+/** Ein Teil eines Intervalls, z. B. 1 min 200 W. */
+export function newPart(durationS = 60, watts = 200, name = "") {
+  return { durationS, watts, name };
+}
+
+/**
+ * Bringt ältere Blöcke auf das aktuelle Format. Intervalle hatten früher genau zwei feste Teile
+ * (onS/onW, offS/offW), jetzt eine Liste parts mit beliebig vielen Teilen.
+ */
+export function normalizeBlock(block) {
+  if (block?.type !== "intervals" || Array.isArray(block.parts)) return block;
+  const { onS, onW, offS, offW, ...rest } = block;
+  const parts = [newPart(onS, onW, "Belastung")];
+  if (offS > 0) parts.push(newPart(offS, offW, "Erholung"));
+  return { ...rest, parts };
+}
+
 export function newBlock(type) {
   switch (type) {
     case "warmup":
@@ -49,7 +68,8 @@ export function newBlock(type) {
     case "ramp":
       return { type: "ramp", name: "Rampe", durationS: 10 * 60, fromW: 180, toW: 220 };
     case "intervals":
-      return { type: "intervals", name: "Intervalle", repeats: 10, onS: 30, onW: 400, offS: 10, offW: 200 };
+      return { type: "intervals", name: "Intervalle", repeats: 10,
+        parts: [newPart(30, 400, "Belastung"), newPart(10, 200, "Erholung")] };
     case "recovery":
       return { type: "steady", name: "Erholung", durationS: 5 * 60, watts: 120 };
     default:
@@ -65,7 +85,8 @@ function checkNumber(value, lo, hi, what) {
 }
 
 /** Gibt eine Liste von Fehlertexten für einen Block zurück (leer = in Ordnung). */
-export function validateBlock(block) {
+export function validateBlock(rawBlock) {
+  const block = normalizeBlock(rawBlock);
   const errors = [];
   const add = (e) => e && errors.push(e);
   if (block.type === "steady") {
@@ -78,10 +99,14 @@ export function validateBlock(block) {
   } else if (block.type === "intervals") {
     add(checkNumber(block.repeats, 1, 500, "Wiederholungen"));
     if (!Number.isInteger(block.repeats)) errors.push("Wiederholungen müssen eine ganze Zahl sein");
-    add(checkNumber(block.onS, 1, MAX_BLOCK_S, "Belastung (s)"));
-    add(checkNumber(block.onW, 0, MAX_WATTS, "Belastung (W)"));
-    add(checkNumber(block.offS, 0, MAX_BLOCK_S, "Erholung (s)"));
-    add(checkNumber(block.offW, 0, MAX_WATTS, "Erholung (W)"));
+    if (!Array.isArray(block.parts) || block.parts.length < 1 || block.parts.length > MAX_PARTS) {
+      errors.push(`Ein Intervall braucht 1 bis ${MAX_PARTS} Teile`);
+    } else {
+      block.parts.forEach((part, k) => {
+        add(checkNumber(part.durationS, 1, MAX_BLOCK_S, `Teil ${k + 1}: Dauer (s)`));
+        add(checkNumber(part.watts, 0, MAX_WATTS, `Teil ${k + 1}: Leistung (W)`));
+      });
+    }
   } else {
     errors.push(`Unbekannter Blocktyp '${block.type}'`);
   }
@@ -102,7 +127,8 @@ export function validateClimb(climb) {
 export function expandWorkout(blocks) {
   if (!Array.isArray(blocks) || blocks.length === 0) throw new Error("Das Training hat noch keine Blöcke");
   const steps = [];
-  blocks.forEach((block, index) => {
+  blocks.forEach((rawBlock, index) => {
+    const block = normalizeBlock(rawBlock);
     const errors = validateBlock(block);
     if (errors.length) throw new Error(`Block ${index + 1} (${block.name || BLOCK_TYPES[block.type] || "?"}): ${errors[0]}`);
     const name = (block.name || BLOCK_TYPES[block.type]).trim();
@@ -111,21 +137,23 @@ export function expandWorkout(blocks) {
     } else if (block.type === "ramp") {
       steps.push({ durationS: block.durationS, startW: block.fromW, endW: block.toW, label: name, blockIndex: index });
     } else {
-      if (steps.length + block.repeats * 2 > MAX_STEPS) throw new Error(`Block ${index + 1}: zu viele Wiederholungen`);
+      const n = block.parts.length;
+      if (steps.length + block.repeats * n > MAX_STEPS) throw new Error(`Block ${index + 1}: zu viele Wiederholungen`);
       for (let i = 1; i <= block.repeats; i++) {
         const tag = `${name} ${i}/${block.repeats}`;
-        steps.push({ durationS: block.onS, startW: block.onW, endW: block.onW, label: `${tag} Belastung`, blockIndex: index });
-        if (block.offS > 0) {
-          steps.push({ durationS: block.offS, startW: block.offW, endW: block.offW, label: `${tag} Erholung`, blockIndex: index });
-        }
+        block.parts.forEach((part, k) => {
+          const partName = (part.name || "").trim() || `Teil ${k + 1}/${n}`;
+          steps.push({ durationS: part.durationS, startW: part.watts, endW: part.watts, label: `${tag} ${partName}`, blockIndex: index });
+        });
       }
     }
   });
   return steps;
 }
 
-export function blockDuration(block) {
-  if (block.type === "intervals") return block.repeats * (block.onS + block.offS);
+export function blockDuration(rawBlock) {
+  const block = normalizeBlock(rawBlock);
+  if (block.type === "intervals") return block.repeats * block.parts.reduce((sum, p) => sum + p.durationS, 0);
   return block.durationS;
 }
 

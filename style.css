@@ -150,7 +150,18 @@ label.field span.unit { font-size: 12px; }
   grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 8px;
   margin-top: 10px;
+  align-items: end;
 }
+.part {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.add-row .btn.paste { border-style: solid; border-color: var(--climb); color: var(--climb); grid-column: 1 / -1; }
 .block-foot { margin-top: 8px; font-size: 13px; color: var(--muted); }
 .block-foot .err { color: var(--warn); }
 .group-label { grid-column: 1 / -1; font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 4px; }

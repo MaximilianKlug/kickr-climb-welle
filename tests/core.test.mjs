@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  RideController, Session, climbGrade, expandWorkout, fmtTime, newBlock, totalDuration, validateClimb,
+  RideController, Session, blockDuration, climbGrade, expandWorkout, fmtTime, newBlock, newPart, normalizeBlock,
+  totalDuration, validateBlock, validateClimb,
 } from "../core.js";
 import { SimKickr, ergCommand, gradeCommand } from "../ble.js";
 
@@ -169,4 +170,45 @@ test("dauerhafte Fehler beenden die Fahrt mit Meldung", async () => {
   await ride(ctrl, trainer, 20);
   assert.equal(ctrl.state, "failed");
   assert.match(ctrl.message, /wiederholt/);
+});
+
+// ---------------------------------------------------------------- Intervalle mit beliebig vielen Teilen
+
+test("Intervall mit 4 Teilen und 5 Wiederholungen (100/200/300 W, 50 W Pause)", () => {
+  const block = {
+    type: "intervals", name: "Treppe", repeats: 5,
+    parts: [newPart(60, 100, "Stufe 1"), newPart(60, 200, "Stufe 2"), newPart(60, 300, "Stufe 3"), newPart(60, 50, "Pause")],
+  };
+  const steps = expandWorkout([block]);
+  assert.equal(steps.length, 20);
+  assert.deepEqual(steps.slice(0, 5).map((s) => s.startW), [100, 200, 300, 50, 100]);
+  assert.equal(steps[19].label, "Treppe 5/5 Pause");
+  assert.equal(blockDuration(block), 5 * 4 * 60);
+});
+
+test("Teile ohne Namen werden durchnummeriert", () => {
+  const steps = expandWorkout([{ type: "intervals", name: "X", repeats: 1, parts: [newPart(10, 100), newPart(10, 200)] }]);
+  assert.deepEqual(steps.map((s) => s.label), ["X 1/1 Teil 1/2", "X 1/1 Teil 2/2"]);
+});
+
+test("Altes Intervallformat wird umgewandelt", () => {
+  const b = normalizeBlock({ type: "intervals", name: "alt", repeats: 2, onS: 30, onW: 400, offS: 10, offW: 200 });
+  assert.deepEqual(b.parts, [newPart(30, 400, "Belastung"), newPart(10, 200, "Erholung")]);
+  assert.equal("onS" in b, false);
+  assert.equal(normalizeBlock(b), b);
+});
+
+test("Ungültige Teile werden gemeldet", () => {
+  assert.match(validateBlock({ type: "intervals", name: "a", repeats: 2, parts: [] })[0], /1 bis/);
+  assert.match(validateBlock({ type: "intervals", name: "a", repeats: 2, parts: [newPart(60, 100), newPart(0, 100)] })[0], /Teil 2/);
+});
+
+test("Kopierter Block ist unabhängig vom Original (Set nach Pause wiederholen)", () => {
+  const set = newBlock("intervals");
+  const copy = structuredClone(set);
+  copy.parts[0].watts = 999;
+  const steps = expandWorkout([set, newBlock("recovery"), structuredClone(set)]);
+  assert.equal(steps[0].startW, 400);
+  assert.equal(steps.at(-2).startW, 400);
+  assert.equal(totalDuration(steps), 2 * blockDuration(set) + 300);
 });
