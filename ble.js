@@ -63,11 +63,15 @@ export function isAccessoryName(name) {
   return /CLIMB|HEADWIND/i.test(name ?? "");
 }
 
+export function isIos() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 export function bluetoothSupport() {
   if (!("bluetooth" in navigator)) {
-    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    return ios
-      ? "Safari kann kein Bluetooth. Auf iPad/iPhone diese Seite in der App „Bluefy“ öffnen."
+    return isIos()
+      ? "Auf iPad und iPhone kann kein normaler Browser Bluetooth, auch Chrome und Edge nicht (Apple-Vorgabe). "
+        + "Lade die kostenlose App „Bluefy – Web BLE Browser“ aus dem App Store und öffne diese Seite darin."
       : "Dieser Browser kann kein Bluetooth. Bitte Chrome oder Edge verwenden.";
   }
   if (!window.isSecureContext) return "Bluetooth braucht eine https-Adresse (oder localhost).";

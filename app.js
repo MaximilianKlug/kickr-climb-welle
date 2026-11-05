@@ -1,8 +1,8 @@
 import {
   BLOCK_TYPES, DEFAULT_CLIMB, MAX_PARTS, RideController, blockDuration, climbGrade, expandWorkout, fmtTime,
   newBlock, newPart, normalizeBlock, totalDuration, validateBlock, validateClimb,
-} from "./core.js?v=2";
-import { KickrBle, SimKickr, bluetoothSupport } from "./ble.js?v=2";
+} from "./core.js?v=3";
+import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=3";
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "kickr.workouts.v1";
@@ -539,7 +539,8 @@ async function connect() {
   const sim = $("sim-mode").checked;
   const problem = sim ? null : bluetoothSupport();
   if (problem) {
-    setConnStatus(problem, "warn");
+    setConnStatus("In diesem Browser geht Bluetooth nicht, siehe Hinweis oben.", "warn");
+    $("bt-support").scrollIntoView({ behavior: "smooth", block: "center" });
     return;
   }
   $("btn-connect").disabled = true;
@@ -689,6 +690,22 @@ function initRide() {
   if (problem) {
     $("bt-support").textContent = problem;
     $("bt-support").classList.remove("hidden");
+    if (isIos()) {
+      // Adresse für Bluefy bereitstellen: kopieren und dort einfügen.
+      const copy = document.createElement("button");
+      copy.className = "btn";
+      copy.style.marginTop = "8px";
+      copy.textContent = "Adresse kopieren (zum Einfügen in Bluefy)";
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(location.origin + location.pathname);
+          copy.textContent = "Kopiert ✓ – jetzt Bluefy öffnen und in die Adresszeile einfügen";
+        } catch {
+          copy.textContent = location.origin + location.pathname;
+        }
+      });
+      $("bt-support").append(document.createElement("br"), copy);
+    }
   }
   $("btn-connect").addEventListener("click", connect);
   $("sim-mode").addEventListener("change", renderRideSetup);

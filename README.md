@@ -10,7 +10,7 @@ fährt währenddessen langsam zwischen zwei Neigungen hoch und runter, damit sic
 
 - Wahoo-Trainer mit Bluetooth FTMS (KICKR, KICKR CORE, KICKR MOVE, KICKR SNAP, aktuelle Firmware über die Wahoo-App).
 - KICKR CLIMB einmal in der Wahoo-App mit dem Trainer koppeln.
-- Chrome oder Edge auf Android, Windows oder Mac. iPhone/iPad: App „Bluefy“ (Safari kann kein Web Bluetooth).
+- Chrome oder Edge auf Android, Windows oder Mac. iPhone/iPad: nur in der App „Bluefy – Web BLE Browser“ (Safari, Chrome und Edge können dort kein Web Bluetooth).
 - Zwift, Wahoo-App usw. schließen. Uhr/Radcomputer den Trainer nur als Leistungsmesser koppeln, nicht als Smart Trainer.
 
 ## Funktionen
