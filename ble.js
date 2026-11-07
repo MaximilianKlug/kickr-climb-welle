@@ -25,6 +25,8 @@ const RECONNECT_DELAY_MS = 4000;
 const OP_NAMES = { [OP_REQUEST_CONTROL]: "Kontrolle", [OP_SET_TARGET_POWER]: "ERG", [OP_SET_SIMULATION]: "Neigung" };
 const RESULT_NAMES = { 2: "nicht unterstützt", 3: "ungültiger Wert", 4: "fehlgeschlagen", 5: "Kontrolle nicht erlaubt" };
 
+import { errorText } from "./core.js?v=4";
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout(promise, ms, what) {
@@ -126,11 +128,19 @@ export class KickrBle {
   async select() {
     // Jeder Trainer mit Bluetooth FTMS oder Wahoo-Namen ("Wahoo KICKR 1A2B", "KICKR CORE …").
     // exclusionFilters blendet CLIMB ("KICKR CLIMB 3C4D") und HEADWIND aus, Browser ohne diese Option ignorieren sie.
-    const device = await navigator.bluetooth.requestDevice({
+    // Bluefy (iOS) kennt exclusionFilters vermutlich nicht, dort ohne; CLIMB wird danach ohnehin abgefangen.
+    const options = {
       filters: [{ services: [FTMS_SERVICE] }, { namePrefix: "Wahoo KICKR" }, { namePrefix: "KICKR" }],
-      exclusionFilters: [{ namePrefix: "KICKR CLIMB" }, { namePrefix: "KICKR HEADWIND" }],
       optionalServices: [FTMS_SERVICE, CPS_SERVICE],
-    });
+    };
+    if (!isIos()) options.exclusionFilters = [{ namePrefix: "KICKR CLIMB" }, { namePrefix: "KICKR HEADWIND" }];
+    let device;
+    try {
+      device = await navigator.bluetooth.requestDevice(options);
+    } catch (err) {
+      if (err?.name === "NotFoundError") throw err; // Auswahl abgebrochen oder nichts gefunden
+      throw new Error(`Gerätesuche: ${errorText(err)}`);
+    }
     if (isAccessoryName(device.name)) {
       throw new Error(`„${device.name}“ ist kein Trainer. Bitte den KICKR selbst auswählen, der CLIMB läuft über ihn.`);
     }
@@ -147,7 +157,15 @@ export class KickrBle {
     this.gradeSent = null;
     this.powerW = 0;
     this.onEvent({ type: "status", text: `Verbinde mit ${this.name} …` });
-    const server = await withTimeout(this.device.gatt.connect(), 20000, "Verbinden");
+    // Jeder Schritt mit Namen, damit eine Fehlermeldung sagt, wo es hakt.
+    const step = async (what, fn) => {
+      try {
+        return await fn();
+      } catch (err) {
+        throw new Error(`${what}: ${errorText(err)}`);
+      }
+    };
+    const server = await step("Bluetooth-Verbindung", () => withTimeout(this.device.gatt.connect(), 20000, "Verbinden"));
     await sleep(SETTLE_MS);
 
     let ftms;
@@ -156,8 +174,8 @@ export class KickrBle {
     } catch {
       throw new Error(`${this.name} bietet kein Bluetooth FTMS. Firmware in der Wahoo-App aktualisieren.`);
     }
-    const control = await ftms.getCharacteristic(FTMS_CONTROL);
-    await control.startNotifications();
+    const control = await step("Befehlskanal öffnen", () => ftms.getCharacteristic(FTMS_CONTROL));
+    await step("Rückmeldungen einschalten", () => control.startNotifications());
     control.addEventListener("characteristicvaluechanged", this.handleControl);
     this.control = control;
 
@@ -166,11 +184,11 @@ export class KickrBle {
       await status.startNotifications();
       status.addEventListener("characteristicvaluechanged", this.handleStatus);
     } catch (err) {
-      this.onEvent({ type: "warning", text: `Statusmeldungen nicht verfügbar (${err.message})` });
+      this.onEvent({ type: "warning", text: `Statusmeldungen nicht verfügbar (${errorText(err)})` });
     }
 
-    await this.requestControl();
-    await this.write(gradeCommand(0));
+    await step("Kontrolle anfordern", () => this.requestControl());
+    await step("CLIMB auf 0 % stellen", () => this.write(gradeCommand(0)));
     this.gradeSent = 0;
     await sleep(SETTLE_MS);
 
@@ -183,7 +201,7 @@ export class KickrBle {
       this.powerAvailable = true;
       this.powerTime = performance.now();
     } catch (err) {
-      this.onEvent({ type: "warning", text: `Keine Leistungsdaten, Auto-Pause aus (${err.message})` });
+      this.onEvent({ type: "warning", text: `Keine Leistungsdaten, Auto-Pause aus (${errorText(err)})` });
     }
     this.onEvent({ type: "status", text: `Verbunden mit ${this.name}` });
   }
@@ -249,7 +267,7 @@ export class KickrBle {
         if (attempt < RECONNECT_ATTEMPTS) await sleep(RECONNECT_DELAY_MS);
       }
     }
-    throw new Error(`nach ${RECONNECT_ATTEMPTS} Versuchen nicht erreichbar (${lastError?.message})`);
+    throw new Error(`nach ${RECONNECT_ATTEMPTS} Versuchen nicht erreichbar (${errorText(lastError)})`);
   }
 
   /** CLIMB auf 0 % und trennen. true = Rückstellung angenommen. */

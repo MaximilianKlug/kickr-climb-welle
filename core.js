@@ -21,6 +21,25 @@ export const RIDE = {
   maxReconnectCycles: 3,
 };
 
+/**
+ * Lesbarer Fehlertext. Manche Browser (z. B. Bluefy auf dem iPad) werfen Strings, Objekte
+ * oder Fehler ohne message, dann stand vorher nur "undefined" da.
+ */
+export function errorText(err) {
+  if (err === null || err === undefined) return "unbekannter Fehler";
+  if (typeof err === "string") return err || "unbekannter Fehler";
+  const message = typeof err.message === "string" ? err.message.trim() : "";
+  const name = typeof err.name === "string" && err.name !== "Error" ? err.name : "";
+  const text = [name, message].filter(Boolean).join(": ");
+  if (text) return text;
+  try {
+    const json = JSON.stringify(err);
+    if (json && json !== "{}") return json;
+  } catch { /* zyklisch o. Ä. */ }
+  const plain = String(err);
+  return plain && plain !== "[object Object]" ? plain : "unbekannter Fehler (ohne Beschreibung)";
+}
+
 export function clamp(v, lo, hi) {
   return Math.min(Math.max(v, lo), hi);
 }
@@ -362,12 +381,12 @@ export class RideController {
     this.failedCycles += 1;
     if (this.failedCycles > this.cfg.maxReconnectCycles) {
       this.state = "failed";
-      this.message = `KICKR bricht wiederholt ab: ${err.message}`;
+      this.message = `KICKR bricht wiederholt ab: ${errorText(err)}`;
       await this.safeClose();
       return;
     }
     this.state = "reconnecting";
-    this.message = `${err.message}. Training pausiert, verbinde neu …`;
+    this.message = `${errorText(err)}. Training pausiert, verbinde neu …`;
     try {
       await this.trainer.reconnect();
       this.sentPower = null;
@@ -375,7 +394,7 @@ export class RideController {
       this.message = "Wieder verbunden.";
     } catch (reconnectErr) {
       this.state = "failed";
-      this.message = `Neu verbinden fehlgeschlagen: ${reconnectErr.message}`;
+      this.message = `Neu verbinden fehlgeschlagen: ${errorText(reconnectErr)}`;
       await this.safeClose();
     }
   }
@@ -398,7 +417,7 @@ export class RideController {
       this.climbReset = await this.trainer.close();
     } catch (err) {
       this.climbReset = false;
-      this.message += ` CLIMB-Rückstellung fehlgeschlagen: ${err.message}`;
+      this.message += ` CLIMB-Rückstellung fehlgeschlagen: ${errorText(err)}`;
     }
   }
 }

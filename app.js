@@ -1,8 +1,8 @@
 import {
   BLOCK_TYPES, DEFAULT_CLIMB, MAX_PARTS, RideController, blockDuration, climbGrade, expandWorkout, fmtTime,
-  newBlock, newPart, normalizeBlock, totalDuration, validateBlock, validateClimb,
-} from "./core.js?v=3";
-import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=3";
+  errorText, newBlock, newPart, normalizeBlock, totalDuration, validateBlock, validateClimb,
+} from "./core.js?v=4";
+import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=4";
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "kickr.workouts.v1";
@@ -44,7 +44,7 @@ function writeStore(store) {
     localStorage.setItem(STORE_KEY, JSON.stringify(store));
     return true;
   } catch (err) {
-    showWoMsg(`Speichern nicht möglich: ${err.message}`, true);
+    showWoMsg(`Speichern nicht möglich: ${errorText(err)}`, true);
     return false;
   }
 }
@@ -359,7 +359,7 @@ function currentSteps() {
   try {
     return { steps: expandWorkout(workout.blocks), error: null };
   } catch (err) {
-    return { steps: [], error: err.message };
+    return { steps: [], error: errorText(err) };
   }
 }
 
@@ -559,7 +559,8 @@ async function connect() {
   } catch (err) {
     const text = err.name === "NotFoundError"
       ? "Kein KICKR ausgewählt. Taucht er nicht auf: kurz treten (aufwecken), Zwift/Wahoo-App schließen, Bluetooth und Standort am Gerät an?"
-      : err.message;
+      : errorText(err);
+    console.error("Verbindung fehlgeschlagen", err);
     // Beim nächsten Tippen wieder das Auswahlfenster zeigen, falls das falsche Gerät gewählt wurde.
     if (trainer instanceof KickrBle && !trainer.connected) {
       trainer.closing = true; // keine "getrennt"-Meldung über die Fehlermeldung schreiben

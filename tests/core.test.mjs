@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import {
   RideController, Session, blockDuration, climbGrade, expandWorkout, fmtTime, newBlock, newPart, normalizeBlock,
-  totalDuration, validateBlock, validateClimb,
+  errorText, totalDuration, validateBlock, validateClimb,
 } from "../core.js";
 import { SimKickr, ergCommand, gradeCommand } from "../ble.js";
 
@@ -211,4 +211,14 @@ test("Kopierter Block ist unabhängig vom Original (Set nach Pause wiederholen)"
   assert.equal(steps[0].startW, 400);
   assert.equal(steps.at(-2).startW, 400);
   assert.equal(totalDuration(steps), 2 * blockDuration(set) + 300);
+});
+
+test("errorText liefert nie 'undefined'", () => {
+  assert.equal(errorText(new Error("kaputt")), "kaputt");
+  assert.equal(errorText(Object.assign(new Error(""), { name: "NetworkError" })), "NetworkError");
+  assert.equal(errorText("Bluefy: abgebrochen"), "Bluefy: abgebrochen");
+  assert.equal(errorText(undefined), "unbekannter Fehler");
+  assert.equal(errorText({ code: 8 }), '{"code":8}');
+  assert.match(errorText({}), /unbekannter Fehler/);
+  assert.doesNotMatch(errorText({ message: undefined, name: "Error" }), /undefined/);
 });
