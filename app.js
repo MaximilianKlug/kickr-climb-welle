@@ -1,8 +1,8 @@
 import {
   BLOCK_TYPES, DEFAULT_CLIMB, MAX_PARTS, RideController, blockDuration, climbGrade, expandWorkout, fmtTime,
   errorText, newBlock, newPart, normalizeBlock, totalDuration, validateBlock, validateClimb,
-} from "./core.js?v=6";
-import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=6";
+} from "./core.js?v=8";
+import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=8";
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "kickr.workouts.v1";
@@ -518,6 +518,8 @@ function renderRideSetup() {
 // ---------------------------------------------------------------- Verbindung
 
 function onTrainerEvent(ev) {
+  // Während der Fahrt Warnungen und Trennungen ins Protokoll (Fehlersuche nach dem Training).
+  if (ctrl && !ctrl.done && (ev.type === "warning" || ev.type === "disconnected")) ctrl.log(ev.text);
   if (ev.type === "power") {
     $("conn-power").textContent = `Leistung live: ${ev.watts} W`;
     return;
@@ -661,7 +663,47 @@ function renderRide() {
   $("btn-pause").textContent = ctrl.manualPause ? "Weiter" : "Pause";
   drawChart($("ride-chart"), s.steps, ctrl.climb, s.position);
   $("ride-progress").innerHTML = `<span>Gefahren <b>${fmtTime(s.totalElapsed)}</b></span>`
-    + (trainer.rejections ? `<span class="notice warn">KICKR hat ${trainer.rejections} Befehl(e) abgelehnt</span>` : "");
+    + (trainer.rejections ? `<span class="notice warn">KICKR hat ${trainer.rejections} Befehl(e) abgelehnt</span>` : "")
+    + (ctrl.disconnects ? `<span class="notice warn">Verbindungsabbrüche: ${ctrl.disconnects}</span>` : "")
+    + (ctrl.retries ? `<span class="notice warn">Befehle wiederholt: ${ctrl.retries}</span>` : "");
+}
+
+const APP_VERSION = 8;
+
+function eventLogText() {
+  const lines = ctrl.events.map((e) => `${fmtTime(e.at)} ${e.text}`);
+  return [`KICKR CLIMB-Welle v${APP_VERSION}`, navigator.userAgent,
+    `Verbindungsabbrüche: ${ctrl.disconnects}, Befehle wiederholt: ${ctrl.retries}`, ...lines].join("\n");
+}
+
+function eventLogHtml() {
+  if (!ctrl.events.length) return `<p class="muted">Keine Verbindungsprobleme.</p>`;
+  const rows = ctrl.events.map((e) => `<li><b>${fmtTime(e.at)}</b> ${escapeHtml(e.text)}</li>`).join("");
+  const open = ctrl.disconnects || ctrl.retries ? "open" : "";
+  return `<details class="help" ${open}><summary>Protokoll (${ctrl.disconnects} Verbindungsabbrüche, ${ctrl.retries} Befehle wiederholt)</summary>`
+    + `<ul>${rows}</ul><button id="btn-copy-log" class="btn">Protokoll kopieren</button></details>`;
+}
+
+async function copyEventLog() {
+  const btn = $("btn-copy-log");
+  const text = eventLogText();
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "Kopiert";
+    return;
+  } catch { /* manche Browser (z. B. ältere Bluefy-Versionen) erlauben das nicht */ }
+  // Ausweg: Text in einem Feld markieren, dann lässt er sich von Hand kopieren.
+  const area = document.createElement("textarea");
+  area.readOnly = true;
+  area.rows = 8;
+  area.style.width = "100%";
+  area.value = text;
+  btn.replaceWith(area);
+  area.focus();
+  area.select();
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch { /* veraltet, aber oft noch vorhanden */ }
+  if (!copied) area.insertAdjacentHTML("beforebegin", `<p class="muted">Text markieren und kopieren:</p>`);
 }
 
 function endRide() {
@@ -680,7 +722,9 @@ function endRide() {
   $("end-text").innerHTML = `<div>Gefahren: <b>${fmtTime(s.totalElapsed)}</b> von ${fmtTime(totalDuration(s.steps))}</div>`
     + `<div class="notice ${ctrl.climbReset ? "ok" : "warn"}">${climbText}</div>`
     + (ctrl.state === "failed" ? `<div class="notice warn">${escapeHtml(ctrl.message)}</div>` : "")
-    + `<p class="muted">Aufzeichnung auf der Uhr/dem Edge jetzt beenden und speichern.</p>`;
+    + `<p class="muted">Aufzeichnung auf der Uhr/dem Edge jetzt beenden und speichern.</p>`
+    + eventLogHtml();
+  $("btn-copy-log")?.addEventListener("click", copyEventLog);
   setPill("getrennt");
   setConnStatus("Nach dem Training getrennt. Für ein neues Training erneut verbinden.");
   $("btn-connect").textContent = "KICKR suchen und verbinden";

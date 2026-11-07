@@ -19,7 +19,9 @@ const STATUS_CONTROL_LOST = 0xff;
 
 const GRADE_ERG_DELAY_MS = 300;
 const SETTLE_MS = 2000;
+const RECONNECT_SETTLE_MS = 800; // beim Wiederverbinden zählt jede Sekunde, der Widerstand fehlt solange
 const WRITE_TIMEOUT_MS = 5000;
+const SLOW_WRITE_MS = 1500; // langsamer Befehl = Hinweis auf Bluetooth-Engpass, kommt ins Protokoll
 const CONTROL_CONFIRM_MS = 2000;
 const RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 4000;
@@ -27,7 +29,7 @@ const RECONNECT_DELAY_MS = 4000;
 const OP_NAMES = { [OP_REQUEST_CONTROL]: "Kontrolle", [OP_SET_TARGET_POWER]: "ERG", [OP_SET_SIMULATION]: "Neigung" };
 const RESULT_NAMES = { 2: "nicht unterstützt", 3: "ungültiger Wert", 4: "fehlgeschlagen", 5: "Kontrolle nicht erlaubt" };
 
-import { errorText } from "./core.js?v=6";
+import { errorText } from "./core.js?v=8";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -122,6 +124,7 @@ export class KickrBle {
     this.responses = new Map();
     this.queue = Promise.resolve();
     this.closing = false;
+    this.ownDisconnectAt = -Infinity; // eigenes Trennen beim Neuverbinden nicht als Abbruch melden
     // Feste Handler: addEventListener ignoriert dieselbe Funktion beim Neuverbinden, sonst doppelte Auswertung.
     this.handleControl = (e) => this.onControlResponse(e.target.value);
     this.handleStatus = (e) => {
@@ -173,11 +176,17 @@ export class KickrBle {
     this.device = device;
     this.device.addEventListener("gattserverdisconnected", () => {
       this.control = null;
-      if (!this.closing) this.onEvent({ type: "disconnected", text: "Verbindung zum KICKR getrennt" });
+      if (this.closing || performance.now() - this.ownDisconnectAt < 3000) return;
+      this.onEvent({ type: "disconnected", text: "Bluetooth-Verbindung zum KICKR abgerissen" });
     });
   }
 
-  async connect() {
+  /**
+   * resetGrade: beim ersten Verbinden CLIMB auf 0 % stellen. Beim Wiederverbinden mitten im Training
+   * NICHT, sonst fährt der CLIMB kurz auf 0 % und zurück (so beim ersten echten Training passiert);
+   * die Fahrsteuerung schickt danach sofort Leistung und aktuelle Neigung.
+   */
+  async connect({ resetGrade = true } = {}) {
     if (!this.device) throw new Error("Kein KICKR ausgewählt");
     this.controlLost = false;
     this.gradeSent = null;
@@ -192,7 +201,7 @@ export class KickrBle {
       }
     };
     const server = await step("Bluetooth-Verbindung", () => withTimeout(this.device.gatt.connect(), 20000, "Verbinden"));
-    await sleep(SETTLE_MS);
+    await sleep(resetGrade ? SETTLE_MS : RECONNECT_SETTLE_MS);
 
     let ftms;
     try {
@@ -215,9 +224,11 @@ export class KickrBle {
     }
 
     await step("Kontrolle anfordern", () => this.requestControl());
-    await step("CLIMB auf 0 % stellen", () => this.write(gradeCommand(0)));
-    this.gradeSent = 0;
-    await sleep(SETTLE_MS);
+    if (resetGrade) {
+      await step("CLIMB auf 0 % stellen", () => this.write(gradeCommand(0)));
+      this.gradeSent = 0;
+      await sleep(SETTLE_MS);
+    }
 
     this.powerAvailable = false;
     try {
@@ -244,6 +255,12 @@ export class KickrBle {
     this.onEvent({ type: "warning", text: describeRejection(opcode, result) });
   }
 
+  /** Kontrolle neu anfordern, ohne die Verbindung zu trennen (nach „Kontrolle verloren“). */
+  async regainControl() {
+    this.controlLost = false;
+    await this.requestControl();
+  }
+
   async requestControl() {
     this.responses.delete(OP_REQUEST_CONTROL);
     await this.write(new Uint8Array([OP_REQUEST_CONTROL]).buffer);
@@ -262,8 +279,14 @@ export class KickrBle {
     const run = async () => {
       if (!this.connected) throw new Error("KICKR nicht verbunden");
       const c = this.control;
+      const name = OP_NAMES[new Uint8Array(buffer)[0]] ?? "Befehl";
+      const started = performance.now();
       const op = c.writeValueWithResponse ? c.writeValueWithResponse(buffer) : c.writeValue(buffer);
-      await withTimeout(op, WRITE_TIMEOUT_MS, "Befehl an KICKR");
+      await withTimeout(op, WRITE_TIMEOUT_MS, `${name}-Befehl an KICKR`);
+      const took = performance.now() - started;
+      if (took > SLOW_WRITE_MS) {
+        this.onEvent({ type: "warning", text: `KICKR antwortet langsam (${name}: ${(took / 1000).toFixed(1)} s)` });
+      }
     };
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => {});
@@ -286,8 +309,11 @@ export class KickrBle {
     for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt++) {
       this.onEvent({ type: "status", text: `Neu verbinden, Versuch ${attempt}/${RECONNECT_ATTEMPTS} …` });
       try {
-        if (this.device?.gatt?.connected) this.device.gatt.disconnect();
-        await this.connect();
+        if (this.device?.gatt?.connected) {
+          this.ownDisconnectAt = performance.now();
+          this.device.gatt.disconnect();
+        }
+        await this.connect({ resetGrade: false });
         return;
       } catch (err) {
         lastError = err;
@@ -366,8 +392,14 @@ export class SimKickr {
     await this.setPower(watts);
   }
 
+  async regainControl() {
+    this.controlLost = false;
+  }
+
   async reconnect() {
-    await this.connect();
+    // Wie KickrBle: beim Wiederverbinden die Neigung NICHT auf 0 setzen.
+    this._connected = true;
+    this.onEvent({ type: "status", text: "Verbunden mit Simulator" });
   }
 
   async close() {

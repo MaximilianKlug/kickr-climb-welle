@@ -19,6 +19,8 @@ export const RIDE = {
   gradeIntervalS: 10,
   intensityStepPct: 5,
   maxReconnectCycles: 3,
+  maxSoftRetries: 2,      // Befehl fehlgeschlagen, Verbindung steht noch: so oft im nächsten Takt neu senden, bevor neu verbunden wird
+  powerGapLogS: 3,        // fehlende Leistungsdaten ab 3 s ins Protokoll (Hinweis auf Bluetooth-Aussetzer)
 };
 
 /**
@@ -314,6 +316,17 @@ export class RideController {
     this.state = "ready"; // ready | riding | autopause | paused | reconnecting | finished | stopped | failed
     this.failedCycles = 0;
     this.message = "";
+    this.events = []; // Protokoll für Anzeige und Fehlersuche: { at: Trainingszeit s, text }
+    this.disconnects = 0;
+    this.retries = 0;        // wiederholte Befehle ohne Neuverbindung (gesamt)
+    this.softFailures = 0;   // aufeinanderfolgende, setzt sich bei Erfolg zurück
+    this.powerGap = false;
+    this.autoPaused = false;  // nur nach einer protokollierten Auto-Pause "Weiter" protokollieren
+  }
+
+  log(text) {
+    this.events.push({ at: this.session.totalElapsed, text });
+    if (this.events.length > 200) this.events.shift();
   }
 
   get done() {
@@ -349,7 +362,9 @@ export class RideController {
       s.advance(dt);
       if (s.finished) return this.finish();
     }
+    const previous = this.state;
     this.state = this.manualPause ? "paused" : active ? "riding" : "autopause";
+    this.logTransitions(previous);
 
     const target = s.targetWatts();
     this.gradeTarget = climbGrade(this.climb, s.totalElapsed);
@@ -370,15 +385,51 @@ export class RideController {
         this.lastErgClock = this.clock; // setGrade sendet ERG mit
       }
       this.failedCycles = 0;
+      this.softFailures = 0;
       this.message = "";
     } catch (err) {
+      // Steht die Verbindung noch, nicht gleich trennen und neu verbinden (das dauert Sekunden und der
+      // Widerstand fehlt solange), sondern im nächsten Takt erneut senden.
+      const t = this.trainer;
+      if (t.connected && !t.controlLost && this.softFailures < this.cfg.maxSoftRetries) {
+        this.softFailures += 1;
+        this.retries += 1;
+        this.sentPower = null; // Leistung im nächsten Takt neu senden; eine nicht gesendete Neigung folgt ohnehin
+        this.log(`Befehl nicht angekommen, Verbindung steht, sende erneut (${errorText(err)})`);
+        return;
+      }
       await this.recover(err);
+    }
+  }
+
+  /** Protokolleinträge für Auto-Pause und fehlende Leistungsdaten (Fehlersuche nach dem Training). */
+  logTransitions(previous) {
+    const t = this.trainer;
+    if (previous === "riding" && this.state === "autopause") {
+      const noData = t.powerAvailable && t.powerAgeS() > this.cfg.powerStaleS;
+      this.log(noData ? "Auto-Pause: keine Leistungsdaten vom KICKR" : `Auto-Pause: unter ${this.cfg.autoPauseWatts} W`);
+      this.autoPaused = true;
+    } else if (this.autoPaused && this.state === "riding") {
+      this.autoPaused = false;
+      this.log("Weiter nach Auto-Pause");
+    }
+    if (!t.powerAvailable || !t.connected) return;
+    const age = t.powerAgeS();
+    if (!this.powerGap && this.state === "riding" && age >= this.cfg.powerGapLogS) {
+      this.powerGap = true;
+      this.log(`Leistungsdaten fehlen seit ${Math.round(age)} s`);
+    } else if (this.powerGap && age < 1.5) {
+      this.powerGap = false;
+      this.log("Leistungsdaten wieder da");
     }
   }
 
   async recover(err) {
     if (this.done) return; // "Beenden" während eines laufenden Befehls: nicht neu verbinden
     this.failedCycles += 1;
+    this.disconnects += 1;
+    const lostAt = Date.now(); // echte Zeit: clock steht während des Wiederverbindens
+    this.log(`Verbindung unterbrochen: ${errorText(err)}`);
     if (this.failedCycles > this.cfg.maxReconnectCycles) {
       this.state = "failed";
       this.message = `KICKR bricht wiederholt ab: ${errorText(err)}`;
@@ -386,12 +437,28 @@ export class RideController {
       return;
     }
     this.state = "reconnecting";
+    this.softFailures = 0;
+    // Nur die Kontrolle verloren (z. B. andere App), Verbindung steht: Kontrolle neu anfordern statt neu verbinden.
+    if (this.trainer.connected && this.trainer.controlLost && this.trainer.regainControl) {
+      try {
+        await this.trainer.regainControl();
+        if (!this.trainer.controlLost) {
+          this.sentPower = null;
+          this.policy.reset();
+          this.log("Kontrolle zurückgeholt, ohne neu zu verbinden");
+          return;
+        }
+      } catch (regainErr) {
+        this.log(`Kontrolle zurückholen fehlgeschlagen: ${errorText(regainErr)}`);
+      }
+    }
     this.message = `${errorText(err)}. Training pausiert, verbinde neu …`;
     try {
       await this.trainer.reconnect();
       this.sentPower = null;
       this.policy.reset();
       this.message = "Wieder verbunden.";
+      this.log(`Wieder verbunden nach ${Math.max(1, Math.round((Date.now() - lostAt) / 1000))} s`);
     } catch (reconnectErr) {
       this.state = "failed";
       this.message = `Neu verbinden fehlgeschlagen: ${errorText(reconnectErr)}`;
