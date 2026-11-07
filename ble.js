@@ -1,11 +1,13 @@
 // Web-Bluetooth-Anbindung des KICKR (FTMS) und Simulator. Ablauf wie in kickr/trainer.py:
 // Kontrolle anfordern (0x00), Neigung (0x11), 300 ms warten, ERG (0x05) sofort neu senden.
 
-const FTMS_SERVICE = 0x1826;
-const FTMS_CONTROL = 0x2ad9;
-const FTMS_STATUS = 0x2ada;
-const CPS_SERVICE = 0x1818;
-const CPS_MEASUREMENT = 0x2a63;
+// Ausgeschriebene UUIDs statt Zahlen: Chrome kann beides, nicht jeder iOS-Browser (Bluefy) die Kurzform.
+export const uuid16 = (n) => `0000${n.toString(16).padStart(4, "0")}-0000-1000-8000-00805f9b34fb`;
+const FTMS_SERVICE = uuid16(0x1826);
+const FTMS_CONTROL = uuid16(0x2ad9);
+const FTMS_STATUS = uuid16(0x2ada);
+const CPS_SERVICE = uuid16(0x1818);
+const CPS_MEASUREMENT = uuid16(0x2a63);
 
 const OP_REQUEST_CONTROL = 0x00;
 const OP_SET_TARGET_POWER = 0x05;
@@ -25,7 +27,7 @@ const RECONNECT_DELAY_MS = 4000;
 const OP_NAMES = { [OP_REQUEST_CONTROL]: "Kontrolle", [OP_SET_TARGET_POWER]: "ERG", [OP_SET_SIMULATION]: "Neigung" };
 const RESULT_NAMES = { 2: "nicht unterstützt", 3: "ungültiger Wert", 4: "fehlgeschlagen", 5: "Kontrolle nicht erlaubt" };
 
-import { errorText } from "./core.js?v=4";
+import { errorText } from "./core.js?v=6";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -80,6 +82,32 @@ export function bluetoothSupport() {
   return null;
 }
 
+// Suchstufen: zuerst alle Geräte zeigen (einfachste Suche, klappt auch in Bluefy am ehesten),
+// Nutzer wählt "Wahoo KICKR …" selbst. Schlägt eine Suche fehl, nimmt der nächste Versuch die nächste Stufe.
+const SEARCH_MODES = [
+  {
+    label: "alle Geräte",
+    options: () => ({ acceptAllDevices: true, optionalServices: [FTMS_SERVICE, CPS_SERVICE] }),
+  },
+  {
+    label: "Trainer mit FTMS oder Namen „KICKR“",
+    options: () => {
+      const o = {
+        filters: [{ services: [FTMS_SERVICE] }, { namePrefix: "Wahoo KICKR" }, { namePrefix: "KICKR" }],
+        optionalServices: [FTMS_SERVICE, CPS_SERVICE],
+      };
+      // Blendet CLIMB und HEADWIND aus. Bluefy kennt die Option vermutlich nicht, dort ohne.
+      if (!isIos()) o.exclusionFilters = [{ namePrefix: "KICKR CLIMB" }, { namePrefix: "KICKR HEADWIND" }];
+      return o;
+    },
+  },
+  {
+    label: "nur nach Namen „Wahoo“/„KICKR“",
+    options: () => ({ filters: [{ namePrefix: "Wahoo" }, { namePrefix: "KICKR" }], optionalServices: [FTMS_SERVICE, CPS_SERVICE] }),
+  },
+];
+let searchMode = 0;
+
 export class KickrBle {
   constructor(onEvent = () => {}) {
     this.onEvent = onEvent; // ({type: 'status'|'warning'|'power'|'disconnected', text})
@@ -126,20 +154,18 @@ export class KickrBle {
 
   /** Muss aus einem Klick heraus aufgerufen werden (Browser-Vorgabe). */
   async select() {
-    // Jeder Trainer mit Bluetooth FTMS oder Wahoo-Namen ("Wahoo KICKR 1A2B", "KICKR CORE …").
-    // exclusionFilters blendet CLIMB ("KICKR CLIMB 3C4D") und HEADWIND aus, Browser ohne diese Option ignorieren sie.
-    // Bluefy (iOS) kennt exclusionFilters vermutlich nicht, dort ohne; CLIMB wird danach ohnehin abgefangen.
-    const options = {
-      filters: [{ services: [FTMS_SERVICE] }, { namePrefix: "Wahoo KICKR" }, { namePrefix: "KICKR" }],
-      optionalServices: [FTMS_SERVICE, CPS_SERVICE],
-    };
-    if (!isIos()) options.exclusionFilters = [{ namePrefix: "KICKR CLIMB" }, { namePrefix: "KICKR HEADWIND" }];
+    const mode = SEARCH_MODES[searchMode];
     let device;
     try {
-      device = await navigator.bluetooth.requestDevice(options);
+      device = await navigator.bluetooth.requestDevice(mode.options());
     } catch (err) {
       if (err?.name === "NotFoundError") throw err; // Auswahl abgebrochen oder nichts gefunden
-      throw new Error(`Gerätesuche: ${errorText(err)}`);
+      const last = searchMode === SEARCH_MODES.length - 1;
+      searchMode = last ? 0 : searchMode + 1;
+      const next = last
+        ? (isIos() ? " In den iPad-Einstellungen unter „Bluefy“ Bluetooth erlauben, Bluetooth im Kontrollzentrum einschalten, Bluefy neu starten." : "")
+        : ` Bitte noch einmal tippen, dann wird anders gesucht (${SEARCH_MODES[searchMode].label}).`;
+      throw new Error(`Gerätesuche (${mode.label}): ${errorText(err)}.${next}`);
     }
     if (isAccessoryName(device.name)) {
       throw new Error(`„${device.name}“ ist kein Trainer. Bitte den KICKR selbst auswählen, der CLIMB läuft über ihn.`);
@@ -172,7 +198,8 @@ export class KickrBle {
     try {
       ftms = await server.getPrimaryService(FTMS_SERVICE);
     } catch {
-      throw new Error(`${this.name} bietet kein Bluetooth FTMS. Firmware in der Wahoo-App aktualisieren.`);
+      throw new Error(`„${this.name}“ ist kein unterstützter Trainer (kein Bluetooth FTMS). Bitte erneut tippen und `
+        + "„Wahoo KICKR …“ wählen. Ist es dein Trainer: Firmware in der Wahoo-App aktualisieren.");
     }
     const control = await step("Befehlskanal öffnen", () => ftms.getCharacteristic(FTMS_CONTROL));
     await step("Rückmeldungen einschalten", () => control.startNotifications());

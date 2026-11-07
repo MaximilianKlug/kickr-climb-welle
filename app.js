@@ -1,8 +1,8 @@
 import {
   BLOCK_TYPES, DEFAULT_CLIMB, MAX_PARTS, RideController, blockDuration, climbGrade, expandWorkout, fmtTime,
   errorText, newBlock, newPart, normalizeBlock, totalDuration, validateBlock, validateClimb,
-} from "./core.js?v=4";
-import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=4";
+} from "./core.js?v=6";
+import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=6";
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "kickr.workouts.v1";
@@ -549,7 +549,7 @@ async function connect() {
       trainer = sim ? new SimKickr(onTrainerEvent) : new KickrBle(onTrainerEvent);
     }
     if (!sim && !trainer.device) {
-      setConnStatus("Suche KICKR … bitte im Fenster auswählen.");
+      setConnStatus("Im Fenster deinen Trainer wählen, meist „Wahoo KICKR …“ (nicht „KICKR CLIMB …“).");
       await trainer.select();
     }
     setPill("verbinde …");

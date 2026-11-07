@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#e8590c">
   <title>KICKR Trainer</title>
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
   <header>
@@ -91,6 +91,8 @@
             </ul>
           </details>
           <button id="btn-connect" class="btn primary big">KICKR suchen und verbinden</button>
+          <div class="muted" style="margin-top:6px">Es öffnet sich eine Liste aller Bluetooth-Geräte. Dort deinen Trainer wählen,
+            meist „Wahoo KICKR …“ – nicht „KICKR CLIMB …“, der läuft über den Trainer mit.</div>
           <div id="conn-status" class="notice">Noch nicht verbunden.</div>
           <div id="conn-power" class="muted" style="margin-top:6px"></div>
           <label class="check"><input id="sim-mode" type="checkbox"> Ohne KICKR testen (Simulator)</label>
@@ -141,6 +143,6 @@
       Trainings werden nur auf diesem Gerät gespeichert, es werden keine Daten verschickt.</footer>
   </main>
 
-  <script type="module" src="app.js?v=4"></script>
+  <script type="module" src="app.js?v=6"></script>
 </body>
 </html>
