@@ -225,6 +225,56 @@ test("Protokoll: Auto-Pause und fehlende Leistungsdaten", async () => {
   assert.ok(texts.includes("Weiter nach Auto-Pause"));
 });
 
+test("Nach jedem Neigungsbefehl geht im nächsten Takt noch ein ERG raus", async () => {
+  const trainer = new SimKickr();
+  await trainer.connect();
+  const ctrl = new RideController(expandWorkout([{ type: "steady", name: "a", durationS: 200, watts: 150 }]), CLIMB, trainer);
+  await ride(ctrl, trainer, 100);
+  const c = trainer.commands;
+  const grades = c.flatMap(([k], i) => (k === "grade" ? [i] : []));
+  assert.ok(grades.length >= 3);
+  for (const i of grades) {
+    assert.deepEqual(c[i + 1], ["erg", 150], "ERG direkt im Neigungsbefehl");
+    assert.deepEqual(c[i + 2], ["erg", 150], "ERG im Takt danach");
+  }
+});
+
+test("Neigung geht bei langsamer Welle etwa alle 25-30 s raus (0-6 %, 5 min)", async () => {
+  const trainer = new SimKickr();
+  await trainer.connect();
+  const ctrl = new RideController(expandWorkout([{ type: "steady", name: "a", durationS: 700, watts: 150 }]), CLIMB, trainer);
+  await ride(ctrl, trainer, 600);
+  const sends = trainer.commands.filter(([k]) => k === "grade").length;
+  assert.ok(sends >= 18 && sends <= 26, `gesendet: ${sends}`);
+});
+
+class DriftKickr extends SimKickr {
+  override = null; // Istleistung statt Ziel
+  tickPower() {
+    super.tickPower();
+    if (this.override !== null) this.powerW = this.override;
+  }
+}
+
+test("Protokoll: Istleistung passt länger nicht zum Ziel, kurze Ausreißer nicht", async () => {
+  const trainer = new DriftKickr();
+  await trainer.connect();
+  const ctrl = new RideController(expandWorkout([{ type: "steady", name: "a", durationS: 120, watts: 150 }]), CLIMB, trainer);
+  await ride(ctrl, trainer, 30);
+  trainer.override = 330;
+  await ride(ctrl, trainer, 2); // Ausreißer
+  trainer.override = null;
+  await ride(ctrl, trainer, 10);
+  assert.deepEqual(ctrl.events.filter((e) => /Leistung/.test(e.text)), []);
+  trainer.override = 340;
+  await ride(ctrl, trainer, 8);
+  trainer.override = null;
+  await ride(ctrl, trainer, 3);
+  const texts = ctrl.events.map((e) => e.text);
+  assert.ok(texts.some((t) => /^Leistung weicht ab: Ziel 150 W, Ist 340 W, Neigung/.test(t)), texts.join(" | "));
+  assert.ok(texts.some((t) => /^Leistung wieder am Ziel nach \d+ s \(Extremwert 340 W\)/.test(t)), texts.join(" | "));
+});
+
 test("dauerhafte Fehler beenden die Fahrt mit Meldung", async () => {
   const trainer = new FlakyKickr(Array.from({ length: 100 }, (_, i) => i + 1));
   await trainer.connect();

@@ -16,10 +16,14 @@ export const RIDE = {
   ergRefreshS: 10,
   gradeMinChange: 0.5,
   gradeMinGapS: 3,
-  gradeIntervalS: 10,
+  gradeIntervalS: 30,     // jeder Neigungsbefehl schaltet den KICKR kurz aus dem ERG-Modus, daher selten senden
   intensityStepPct: 5,
   maxReconnectCycles: 3,
   maxSoftRetries: 2,      // Befehl fehlgeschlagen, Verbindung steht noch: so oft im nächsten Takt neu senden, bevor neu verbunden wird
+  powerDeviationW: 50,    // Protokoll: Istleistung weicht mindestens so weit vom Ziel ab ...
+  powerDeviationPct: 25,  // ... bzw. so viel Prozent des Ziels (der größere Wert zählt) ...
+  powerDeviationS: 3,     // ... und das so lange am Stück ...
+  powerDeviationGraceS: 10, // ... nicht in den ersten Sekunden nach einem Leistungssprung oder Weitertreten
   powerGapLogS: 3,        // fehlende Leistungsdaten ab 3 s ins Protokoll (Hinweis auf Bluetooth-Aussetzer)
 };
 
@@ -321,6 +325,10 @@ export class RideController {
     this.retries = 0;        // wiederholte Befehle ohne Neuverbindung (gesamt)
     this.softFailures = 0;   // aufeinanderfolgende, setzt sich bei Erfolg zurück
     this.powerGap = false;
+    this.ergConfirmDue = false; // ERG im Takt nach einem Neigungsbefehl noch einmal senden
+    this.deviation = null;      // laufende Abweichung Ist/Ziel
+    this.graceUntil = cfg.powerDeviationGraceS;
+    this.lastTarget = null;
     this.autoPaused = false;  // nur nach einer protokollierten Auto-Pause "Weiter" protokollieren
   }
 
@@ -368,14 +376,16 @@ export class RideController {
 
     const target = s.targetWatts();
     this.gradeTarget = climbGrade(this.climb, s.totalElapsed);
+    this.watchDeviation(target, previous);
 
     try {
       if (this.trainer.controlLost) throw new Error("Kontrolle über den KICKR verloren");
       if (!this.trainer.connected) throw new Error("Verbindung zum KICKR getrennt");
-      if (target !== this.sentPower || this.clock - this.lastErgClock >= this.cfg.ergRefreshS) {
+      if (target !== this.sentPower || this.ergConfirmDue || this.clock - this.lastErgClock >= this.cfg.ergRefreshS) {
         await this.trainer.setPower(target);
         this.sentPower = target;
         this.lastErgClock = this.clock;
+        this.ergConfirmDue = false;
       }
       // Welle läuft nur in Fahrt weiter; nach Wiederverbindung (policy zurückgesetzt) sofort senden.
       if (this.climb.enabled && (active || this.policy.lastGrade === null)
@@ -383,6 +393,8 @@ export class RideController {
         await this.trainer.setGrade(this.gradeTarget, target);
         this.policy.markSent(this.gradeTarget, this.clock);
         this.lastErgClock = this.clock; // setGrade sendet ERG mit
+        // Geht dieses ERG unter, bliebe der KICKR bis zur nächsten Auffrischung im Neigungsmodus.
+        this.ergConfirmDue = true;
       }
       this.failedCycles = 0;
       this.softFailures = 0;
@@ -400,6 +412,32 @@ export class RideController {
       }
       await this.recover(err);
     }
+  }
+
+  /** Protokoll: Istleistung passt länger nicht zum Ziel. Zeigt Vorfälle, die keine Verbindungsfehler sind. */
+  watchDeviation(target, previous) {
+    const t = this.trainer;
+    const cfg = this.cfg;
+    if (this.lastTarget !== null && Math.abs(target - this.lastTarget) >= 20) this.graceUntil = this.clock + cfg.powerDeviationGraceS;
+    if (previous !== "riding") this.graceUntil = this.clock + cfg.powerDeviationGraceS;
+    this.lastTarget = target;
+    const usable = this.state === "riding" && t.powerAvailable && t.connected && t.powerAgeS() < cfg.powerGapLogS
+      && this.clock >= this.graceUntil;
+    const dev = this.deviation;
+    const limit = Math.max(cfg.powerDeviationW, (target * cfg.powerDeviationPct) / 100);
+    if (!usable || Math.abs(t.powerW - target) < limit) {
+      if (dev?.logged) this.log(`Leistung wieder am Ziel nach ${Math.round(this.clock - dev.since)} s (Extremwert ${dev.extreme} W)`);
+      this.deviation = null;
+      return;
+    }
+    const current = dev ?? { since: this.clock, logged: false, extreme: t.powerW };
+    if (Math.abs(t.powerW - target) > Math.abs(current.extreme - target)) current.extreme = t.powerW;
+    if (!current.logged && this.clock - current.since >= cfg.powerDeviationS) {
+      current.logged = true;
+      const age = this.policy.lastGrade === null ? "" : `, letzter Neigungsbefehl vor ${Math.round(this.clock - this.policy.lastTime)} s`;
+      this.log(`Leistung weicht ab: Ziel ${target} W, Ist ${t.powerW} W, Neigung ${this.gradeTarget.toFixed(1)} %${age}`);
+    }
+    this.deviation = current;
   }
 
   /** Protokolleinträge für Auto-Pause und fehlende Leistungsdaten (Fehlersuche nach dem Training). */

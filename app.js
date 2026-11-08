@@ -1,8 +1,8 @@
 import {
   BLOCK_TYPES, DEFAULT_CLIMB, MAX_PARTS, RideController, blockDuration, climbGrade, expandWorkout, fmtTime,
   errorText, newBlock, newPart, normalizeBlock, totalDuration, validateBlock, validateClimb,
-} from "./core.js?v=8";
-import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=8";
+} from "./core.js?v=9";
+import { KickrBle, SimKickr, bluetoothSupport, isIos } from "./ble.js?v=9";
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "kickr.workouts.v1";
@@ -517,9 +517,12 @@ function renderRideSetup() {
 
 // ---------------------------------------------------------------- Verbindung
 
+const connectWarnings = [];
+
 function onTrainerEvent(ev) {
   // Während der Fahrt Warnungen und Trennungen ins Protokoll (Fehlersuche nach dem Training).
   if (ctrl && !ctrl.done && (ev.type === "warning" || ev.type === "disconnected")) ctrl.log(ev.text);
+  else if (ev.type === "warning") connectWarnings.push(ev.text); // vor der Fahrt, kommt beim Start ins Protokoll
   if (ev.type === "power") {
     $("conn-power").textContent = `Leistung live: ${ev.watts} W`;
     return;
@@ -605,6 +608,7 @@ async function startRide() {
   const { steps, error } = currentSteps();
   if (error || !trainer?.connected) return;
   ctrl = new RideController(steps, structuredClone(workout.climb), trainer);
+  connectWarnings.splice(0).forEach((text) => ctrl.log(`Beim Verbinden: ${text}`));
   $("ride-setup").classList.add("hidden");
   $("ride-end").classList.add("hidden");
   $("ride-live").classList.remove("hidden");
@@ -668,7 +672,7 @@ function renderRide() {
     + (ctrl.retries ? `<span class="notice warn">Befehle wiederholt: ${ctrl.retries}</span>` : "");
 }
 
-const APP_VERSION = 8;
+const APP_VERSION = 9;
 
 function eventLogText() {
   const lines = ctrl.events.map((e) => `${fmtTime(e.at)} ${e.text}`);

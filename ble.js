@@ -21,6 +21,7 @@ const GRADE_ERG_DELAY_MS = 300;
 const SETTLE_MS = 2000;
 const RECONNECT_SETTLE_MS = 800; // beim Wiederverbinden zählt jede Sekunde, der Widerstand fehlt solange
 const WRITE_TIMEOUT_MS = 5000;
+const GRADE_ERG_WARN_MS = 1000; // länger sollte der KICKR nicht ohne erneutes ERG im Neigungsmodus bleiben
 const SLOW_WRITE_MS = 1500; // langsamer Befehl = Hinweis auf Bluetooth-Engpass, kommt ins Protokoll
 const CONTROL_CONFIRM_MS = 2000;
 const RECONNECT_ATTEMPTS = 5;
@@ -29,7 +30,7 @@ const RECONNECT_DELAY_MS = 4000;
 const OP_NAMES = { [OP_REQUEST_CONTROL]: "Kontrolle", [OP_SET_TARGET_POWER]: "ERG", [OP_SET_SIMULATION]: "Neigung" };
 const RESULT_NAMES = { 2: "nicht unterstützt", 3: "ungültiger Wert", 4: "fehlgeschlagen", 5: "Kontrolle nicht erlaubt" };
 
-import { errorText } from "./core.js?v=8";
+import { errorText } from "./core.js?v=9";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -299,9 +300,14 @@ export class KickrBle {
 
   async setGrade(grade, watts) {
     await this.write(gradeCommand(grade));
+    const gradeDone = performance.now();
     this.gradeSent = grade;
     await sleep(GRADE_ERG_DELAY_MS);
     await this.write(ergCommand(watts));
+    const gap = performance.now() - gradeDone;
+    if (gap > GRADE_ERG_WARN_MS) {
+      this.onEvent({ type: "warning", text: `ERG erst ${(gap / 1000).toFixed(1)} s nach dem Neigungsbefehl gesendet` });
+    }
   }
 
   async reconnect() {
